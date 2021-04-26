@@ -4,23 +4,34 @@ use crossterm::{
 };
 use futures::{future::FutureExt, StreamExt};
 
+/* First step in input pipeline -- receives terminal events and
+ * sends them to the appropriate handler.
+ *
+ * Panics --
+ * On unknown keyboard input, panics.
+ * */
+
 pub async fn receive_terminal_events() {
     let mut reader = EventStream::new();
 
     loop {
         let event = reader.next().fuse();
-        match event.await {
-            Some(Ok(event)) => {
-                if event == Event::Key(
-                    KeyEvent{code: KeyCode::Char('c'),
-                             modifiers: KeyModifiers::CONTROL}) {
-                    println!("Caught interrupt");
-                    break;
-                } else {
-                    println!("Character {:?} typed.", event)
-                }
+        let maybe_event = event.await.unwrap().unwrap();
+        match maybe_event {
+            // Any character keypress, unmodified.
+            Event::Key(KeyEvent{code: KeyCode::Char(ch),
+                                modifiers: KeyModifiers::NONE}) => {
+                println!("{} was pressed.", ch);
             }
-            _ => panic!("idk what I'm doing")
+            // Keyboard Interrupt
+            Event::Key(KeyEvent{code: KeyCode::Char('c'),
+                                modifiers: KeyModifiers::CONTROL}) => {
+                println!("Caught keyboard interrupt.");
+                break;
+            }
+            _ => {
+                panic!("Unhandled terminal event");
+            }
         }
     }
 }
