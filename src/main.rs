@@ -1,13 +1,11 @@
 mod event;
 mod ui;
-mod handlers;
-
-use crate::handlers::tui::*;
+use crate::ui::*;
 
 #[tokio::main]
 async fn main() {
 
     // Run ui
     let mut ui = Ui::new();
-    ui.listen();
+    ui.listen().await;
 }
