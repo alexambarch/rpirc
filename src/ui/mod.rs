@@ -11,8 +11,11 @@ use tui::{ Terminal, Frame,
 };
 use futures::{future::FutureExt, StreamExt};
 use crossterm::{
+    execute,
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen}
 };
+use std::rc::Rc;
 
 // Redraw the UI, Terminate the UI, or perform an action on tabs
 enum UiEvent {
@@ -36,14 +39,13 @@ enum TabEvent {
     View(usize)
 }
 
-
 pub struct Ui<B>
 where B: Backend
 {
     term: Terminal<B>,
     current_tab: usize,
     tab_count: usize,
-    current_route: Route,
+    current_route: Rc<Route>,
     ibuf: InputBuffer,
 }
 
@@ -51,6 +53,7 @@ impl Default for Ui<CrosstermBackend<Stdout>>
 {
     fn default() -> Self {
         enable_raw_mode().unwrap();
+        execute!(stdout(), EnterAlternateScreen);
         let mut term = Terminal::new(CrosstermBackend::new(stdout())).unwrap();
         term.clear().unwrap();
 
@@ -58,7 +61,7 @@ impl Default for Ui<CrosstermBackend<Stdout>>
             term,
             current_tab: 0,
             tab_count: 1,
-            current_route: Route::Startup,
+            current_route: Rc::new(Route::Startup), // HACK (?) Use Rc for current_route so I can reference it multiple times
             ibuf: InputBuffer::new(),
         }
     }
@@ -95,15 +98,17 @@ impl Ui<CrosstermBackend<Stdout>> {
                 // Keyboard Interrupt
                 Event::Key(KeyEvent{code: KeyCode::Char('c'),
                                     modifiers: KeyModifiers::CONTROL}) => {
-                    println!("Caught keyboard interrupt.");
                     disable_raw_mode().unwrap();
+                    execute!(stdout(), LeaveAlternateScreen);
                     break;
                 }
 
                 // Some other case I'm sure I'm forgetting
                 _ => {}
             }
-            self.draw(&Route::Startup);
+
+            // Redraw UI on keypress
+            self.draw(&self.current_route.clone());
         }
     }
 
