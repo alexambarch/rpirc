@@ -1,40 +1,23 @@
-use crate::event::InputBuffer;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use anyhow::Result;
+use tokio::sync::mpsc::Receiver;
 use std::io::stdout;
 use std::io::Stdout;
-use tui::{ Terminal, Frame,
+use tui::{Terminal, Frame,
            backend::{Backend, CrosstermBackend},
            widgets::{Paragraph, Block, Borders, List, ListItem},
            layout::{Layout, Constraint, Direction, Rect},
            text::Span,
            style::{Style, Modifier},
 };
-use futures::{future::FutureExt, StreamExt};
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen}
 };
+use util::{UiEvent, Route};
+use unicode_width::UnicodeWidthChar;
 
-// Redraw the UI, Terminate the UI, or perform an action on tabs
-enum UiEvent {
-    Redraw,
-    Terminate,
-    Scene(Route),
-    Tab(TabEvent),
-}
-
-// Routes in the app
-pub enum Route {
-    Startup,
-    Channel,
-    PrivMsg,
-}
-
-// Actions on Tabs
-enum TabEvent {
-    Create,
-    Delete(usize),
-    View(usize)
-}
+use crate::app::App;
 
 
 pub struct Ui<B>
@@ -43,14 +26,18 @@ where B: Backend
     term: Terminal<B>,
     current_tab: usize,
     tab_count: usize,
-    current_route: Route,
-    ibuf: InputBuffer,
 }
 
 impl Default for Ui<CrosstermBackend<Stdout>>
 {
     fn default() -> Self {
         enable_raw_mode().unwrap();
+
+        match execute!(stdout(), EnterAlternateScreen) {
+            Ok(a) => a,
+            _ => unreachable!(),
+        };
+
         let mut term = Terminal::new(CrosstermBackend::new(stdout())).unwrap();
         term.clear().unwrap();
 
@@ -58,8 +45,6 @@ impl Default for Ui<CrosstermBackend<Stdout>>
             term,
             current_tab: 0,
             tab_count: 1,
-            current_route: Route::Startup,
-            ibuf: InputBuffer::new(),
         }
     }
 }
@@ -69,50 +54,54 @@ impl Ui<CrosstermBackend<Stdout>> {
         Default::default()
     }
 
-    pub async fn listen(&mut self) {
-        let mut reader = EventStream::new();
-        self.draw(&Route::Startup);
-
-        while let Some(event) = reader.next().fuse().await {
-            match event.unwrap() {
-                // Send character keypresses to text input handler
-                Event::Key(KeyEvent{code: KeyCode::Char(ch),
-                                    modifiers: KeyModifiers::NONE}) => {
-                    self.ibuf.message_buffer.push(ch);
+    pub async fn listen(&mut self,
+                             mut rx: Receiver<util::UiEvent>,
+                             app: &mut App) {
+        while let Some(event) = rx.recv().await {
+            match event {
+                UiEvent::Buffer(ch) => {
+                    app.input.insert(app.input_loc, ch);
+                    app.input_loc += 1;
+                    app.input_cursor_position += UnicodeWidthChar::width(ch).unwrap();
                 }
 
-                // Backspace deletes a character from the buffer.
-                Event::Key(KeyEvent{code: KeyCode::Backspace,
-                                    modifiers: KeyModifiers::NONE}) => {
-                    self.ibuf.message_buffer.pop();
-                }
-                // Enter key executes whatever is inside of the input buffer.
-                Event::Key(KeyEvent{code: KeyCode::Enter,
-                                    modifiers: KeyModifiers::NONE}) => {
-                    self.ibuf.execute().unwrap();
+                UiEvent::Del => {
+                    let ch = app.input.remove(app.input_loc);
+                    app.input_loc -= 1;
+                    app.input_cursor_position -= UnicodeWidthChar::width(ch).unwrap();
                 }
 
-                // Keyboard Interrupt
-                Event::Key(KeyEvent{code: KeyCode::Char('c'),
-                                    modifiers: KeyModifiers::CONTROL}) => {
-                    println!("Caught keyboard interrupt.");
+                UiEvent::Left => {
+                    app.input_loc -= 1;
+                    app.input_cursor_position -= UnicodeWidthChar::width(*app.input.get(app.input_loc).unwrap()).unwrap();
+                }
+
+                UiEvent::Right => {
+                    app.input_cursor_position += UnicodeWidthChar::width(*app.input.get(app.input_loc).unwrap()).unwrap();
+                    app.input_loc += 1;
+                }
+
+                UiEvent::Terminate => {
                     disable_raw_mode().unwrap();
+                    execute!(stdout(), LeaveAlternateScreen).unwrap();
                     break;
                 }
 
-                // Some other case I'm sure I'm forgetting
                 _ => {}
             }
-            self.draw(&Route::Startup);
+
+            self.draw(&app.current_route, app);
         }
+
+        rx.close();
     }
 
-    pub fn draw(&mut self, route: &Route) {
-        let input = self.ibuf.message_buffer.clone();
+    pub fn draw(&mut self, route: &Route, app: &App) {
+        let input = &app.input;
 
         match route {
             Route::Startup => {
-                self.term.draw(|f| {
+                match self.term.draw(|f| {
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
                         .margin(1)
@@ -127,19 +116,27 @@ impl Ui<CrosstermBackend<Stdout>> {
 
                     let header_text = Span::raw("rpirc -- version 0.1.0");
                     let header = Paragraph::new(header_text)
-                        .block(Block::default().title("Welcome!").borders(Borders::ALL));
+                        .block(Block::default()
+                               .title("Welcome!")
+                               .borders(Borders::ALL));
                     f.render_widget(header, chunks[0]);
 
                     let items = [ListItem::new("irc.freenode.net"),
                                  ListItem::new("irc.orpheus.network")];
                     let body = List::new(items)
-                        .block(Block::default().title("Quickconnect").borders(Borders::NONE))
-                        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+                        .block(Block::default()
+                               .title("Quickconnect")
+                               .borders(Borders::NONE))
+                        .highlight_style(Style::default()
+                                         .add_modifier(Modifier::BOLD))
                         .highlight_symbol(">>");
                     f.render_widget(body, chunks[1]);
 
-                    draw_input_box(f, input, chunks[2]);
-                });
+                    draw_input_box(f, input.iter().collect(), chunks[2]);
+                }) {
+                    Ok(a) => a,
+                    _ => unreachable!(),
+                };
             }
 
             Route::Channel => {
@@ -162,4 +159,32 @@ where B: Backend
     let block = Paragraph::new(text)
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(block, layout_chunk);
+}
+
+pub mod util {
+    // Redraw the UI, Terminate the UI, or perform an action on tabs
+    pub enum UiEvent {
+        Buffer(char),
+        Del,
+        Execute,
+        Scene(Route),
+        Tab(TabEvent),
+        Terminate,
+        Left,
+        Right
+    }
+
+    // Routes in the app
+    pub enum Route {
+        Startup,
+        Channel,
+        PrivMsg,
+    }
+
+    // Actions on Tabs
+    pub enum TabEvent {
+        Create,
+        Delete(usize),
+        View(usize)
+    }
 }

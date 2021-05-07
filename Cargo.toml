@@ -14,3 +14,4 @@ crossterm = { version = "0.19", features = ["event-stream"] }
 anyhow = "1.0.40"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3.14"
+unicode-width = "0.1.8"
