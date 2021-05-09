@@ -1,5 +1,4 @@
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use anyhow::Result;
 use tokio::sync::mpsc::Receiver;
 use std::io::stdout;
 use std::io::Stdout;
@@ -10,10 +9,9 @@ use tui::{Terminal, Frame,
            text::Span,
            style::{Style, Modifier},
 };
-use crossterm::{
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen}
-};
+use crossterm::terminal::EnterAlternateScreen;
+use crossterm::execute;
+
 use util::{UiEvent, Route};
 use unicode_width::UnicodeWidthChar;
 
@@ -23,8 +21,6 @@ pub struct Ui<B>
 where B: Backend
 {
     term: Terminal<B>,
-    current_tab: usize,
-    tab_count: usize,
 }
 
 impl Default for Ui<CrosstermBackend<Stdout>>
@@ -42,8 +38,6 @@ impl Default for Ui<CrosstermBackend<Stdout>>
 
         Ui {
             term,
-            current_tab: 0,
-            tab_count: 1,
         }
     }
 }
@@ -54,8 +48,9 @@ impl Ui<CrosstermBackend<Stdout>> {
     }
 
     pub async fn listen(&mut self,
-                             mut rx: Receiver<util::UiEvent>,
-                             app: &mut App) {
+                        mut rx: Receiver<util::UiEvent>,
+                        app: &mut App) {
+        self.draw(&Route::Startup, &app);
         while let Some(event) = rx.recv().await {
             match event {
                 UiEvent::Buffer(ch) => {
@@ -64,26 +59,39 @@ impl Ui<CrosstermBackend<Stdout>> {
                     app.input_cursor_position += UnicodeWidthChar::width(ch).unwrap();
                 }
 
-                UiEvent::Del => {
-                    let ch = app.input.remove(app.input_loc);
+                UiEvent::Del if app.input_loc > 0 => {
+                    let ch = app.input.remove(app.input_loc - 1);
                     app.input_loc -= 1;
                     app.input_cursor_position -= UnicodeWidthChar::width(ch).unwrap();
                 }
 
-                UiEvent::Left => {
+                UiEvent::Left if app.input_loc > 0 => {
                     app.input_loc -= 1;
                     app.input_cursor_position -= UnicodeWidthChar::width(*app.input.get(app.input_loc).unwrap()).unwrap();
                 }
 
-                UiEvent::Right => {
+                UiEvent::Right if app.input_loc < app.input.len() => {
                     app.input_cursor_position += UnicodeWidthChar::width(*app.input.get(app.input_loc).unwrap()).unwrap();
                     app.input_loc += 1;
                 }
 
                 UiEvent::Terminate => {
-                    disable_raw_mode().unwrap();
-                    execute!(stdout(), LeaveAlternateScreen).unwrap();
                     break;
+                }
+
+                UiEvent::Execute if app.input.len() > 0 => {
+                    if handle_input(app.input.iter().collect()).is_none() {
+                        disable_raw_mode().unwrap();
+                        break;
+                    }
+                }
+
+                UiEvent::Scene(sc) => {
+                    app.current_route = sc;
+                }
+
+                UiEvent::Tab(ev) => {
+                    handle_tab_event(ev, app);
                 }
 
                 _ => {}
@@ -94,6 +102,7 @@ impl Ui<CrosstermBackend<Stdout>> {
 
         rx.close();
     }
+
 
     pub fn draw(&mut self, route: &Route, app: &App) {
         let input = &app.input;
@@ -185,5 +194,28 @@ pub mod util {
         Create,
         Delete(usize),
         View(usize)
+    }
+}
+
+// Returns Some to run on input command, else None
+fn handle_input (input: String) -> Option<()> {
+    if input.starts_with('/') {
+        let args: Vec<&str> = input[1..].split(' ').collect();
+
+        match args[0] {
+            "quit" => {
+                return None
+            }
+
+            _  => {}
+        }
+    }
+
+    Some(())
+}
+
+fn handle_tab_event(event: util::TabEvent, app: &mut App) {
+    match event {
+        _ => {}
     }
 }

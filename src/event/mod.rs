@@ -1,9 +1,8 @@
-use anyhow::Result;
-use crossterm::event::{EventStream, Event, Event::Key,
+use crossterm::event::{EventStream, Event::Key,
                        KeyEvent, KeyCode, KeyModifiers};
 use tokio::sync::mpsc::Sender;
 use futures::{future::FutureExt, StreamExt};
-use crate::ui::util::*;
+use crate::ui::util::UiEvent;
 
 
 /* listen_events()
@@ -11,57 +10,60 @@ use crate::ui::util::*;
  * Listen for keyboard events and send the appropriate message to the UI
  * */
 
-pub async fn listen_events(tx: Sender<UiEvent>) -> Result<()> {
+pub async fn listen_events(tx: Sender<UiEvent>) {
     let mut reader = EventStream::new();
 
     while let Some(event) = reader.next().fuse().await {
+
+        // Keep sending until receiver is closed
         match event.unwrap() {
             // Send character keypresses to text input handler
             Key(KeyEvent{code: KeyCode::Char(ch),
                          modifiers: KeyModifiers::NONE}) => {
-                send_ui_event(UiEvent::Buffer(ch), &tx).await;
+                if tx.send(UiEvent::Buffer(ch)).await.is_err() {
+                    break;
+                }
             }
 
             // Backspace deletes a character from the buffer.
             Key(KeyEvent{code: KeyCode::Backspace,
-                                modifiers: KeyModifiers::NONE}) => {
-                send_ui_event(UiEvent::Del, &tx).await;
+                         modifiers: KeyModifiers::NONE}) => {
+                if tx.send(UiEvent::Del).await.is_err() {
+                    break;
+                }
             }
 
             // Enter key executes whatever is inside of the input buffer.
             Key(KeyEvent{code: KeyCode::Enter,
                          modifiers: KeyModifiers::NONE}) => {
-                send_ui_event(UiEvent::Execute, &tx).await;
+                if tx.send(UiEvent::Execute).await.is_err() {
+                    break;
+                }
             }
 
             // Arrow keys move cursor inside of input
             Key(KeyEvent{code: KeyCode::Left,
                          modifiers: KeyModifiers::NONE}) => {
-                send_ui_event(UiEvent::Left, &tx).await;
+                if tx.send(UiEvent::Left).await.is_err() {
+                    break;
+                }
             }
 
             Key(KeyEvent{code: KeyCode::Right,
                          modifiers: KeyModifiers::NONE}) => {
-                send_ui_event(UiEvent::Right, &tx).await;
+                if tx.send(UiEvent::Right).await.is_err() {
+                    break;
+                }
             }
 
             // Keyboard Interrupt
-            Event::Key(KeyEvent{code: KeyCode::Char('c'),
-                                modifiers: KeyModifiers::CONTROL}) => {
-                send_ui_event(UiEvent::Terminate, &tx).await;
-                break;
+            Key(KeyEvent{code: KeyCode::Char('c'),
+                         modifiers: KeyModifiers::CONTROL}) => {
+                    break;
             }
 
             // Some other case I'm sure I'm forgetting
             _ => {}
         }
-    }
-
-    Ok(())
-}
-
-async fn send_ui_event (event: UiEvent, tx: &Sender<UiEvent>) {
-    if let Err(e) = tx.send(event).await {
-        eprintln!("{}", e);
     }
 }
