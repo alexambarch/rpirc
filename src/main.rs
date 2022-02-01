@@ -1,14 +1,14 @@
+mod app;
 mod event;
 mod ui;
-mod app;
 
-use ui::Ui;
-use ui::util::UiEvent;
 use app::App;
-use tokio::sync::mpsc::{Sender, Receiver, channel};
-use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
 use std::io::stdout;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use ui::util::UiEvent;
+use ui::Ui;
 
 #[tokio::main]
 async fn main() {

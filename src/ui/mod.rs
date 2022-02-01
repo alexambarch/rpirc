@@ -1,30 +1,31 @@
+use crossterm::execute;
+use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use tokio::sync::mpsc::Receiver;
 use std::io::stdout;
 use std::io::Stdout;
-use tui::{Terminal, Frame,
-           backend::{Backend, CrosstermBackend},
-           widgets::{Paragraph, Block, Borders, List, ListItem},
-           layout::{Layout, Constraint, Direction, Rect},
-           text::Span,
-           style::{Style, Modifier},
+use tokio::sync::mpsc::Receiver;
+use tui::{
+    backend::{Backend, CrosstermBackend},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::Span,
+    widgets::{Block, Borders, List, ListItem, Paragraph},
+    Frame, Terminal,
 };
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::execute;
 
-use util::{UiEvent, Route};
 use unicode_width::UnicodeWidthChar;
+use util::{Route, UiEvent};
 
 use crate::app::App;
 
 pub struct Ui<B>
-where B: Backend
+where
+    B: Backend,
 {
     term: Terminal<B>,
 }
 
-impl Default for Ui<CrosstermBackend<Stdout>>
-{
+impl Default for Ui<CrosstermBackend<Stdout>> {
     fn default() -> Self {
         enable_raw_mode().unwrap();
 
@@ -36,9 +37,7 @@ impl Default for Ui<CrosstermBackend<Stdout>>
         let mut term = Terminal::new(CrosstermBackend::new(stdout())).unwrap();
         term.clear().unwrap();
 
-        Ui {
-            term,
-        }
+        Ui { term }
     }
 }
 
@@ -47,9 +46,7 @@ impl Ui<CrosstermBackend<Stdout>> {
         Default::default()
     }
 
-    pub async fn listen(&mut self,
-                        mut rx: Receiver<util::UiEvent>,
-                        app: &mut App) {
+    pub async fn listen(&mut self, mut rx: Receiver<util::UiEvent>, app: &mut App) {
         self.draw(&Route::Startup, &app);
         while let Some(event) = rx.recv().await {
             match event {
@@ -67,12 +64,31 @@ impl Ui<CrosstermBackend<Stdout>> {
 
                 UiEvent::Left if app.input_loc > 0 => {
                     app.input_loc -= 1;
-                    app.input_cursor_position -= UnicodeWidthChar::width(*app.input.get(app.input_loc).unwrap()).unwrap();
+                    app.input_cursor_position -=
+                        UnicodeWidthChar::width(*app.input.get(app.input_loc).unwrap()).unwrap();
                 }
 
                 UiEvent::Right if app.input_loc < app.input.len() => {
-                    app.input_cursor_position += UnicodeWidthChar::width(*app.input.get(app.input_loc).unwrap()).unwrap();
+                    app.input_cursor_position +=
+                        UnicodeWidthChar::width(*app.input.get(app.input_loc).unwrap()).unwrap();
                     app.input_loc += 1;
+                }
+
+                UiEvent::Up => {
+                    app.history_loc = app.history_loc + 1;
+                    app.input = app
+                        .history
+                        .get(new_history_loc)
+                        .unwrap()
+                        .chars()
+                        .collect::<Vec<char>>();
+                    app.history_loc = new_history_loc;
+                }
+
+                UiEvent::Down => {
+                    if app.history_loc == 0 {
+                        app.input = vec![];
+                    }
                 }
 
                 UiEvent::Terminate => {
@@ -103,7 +119,6 @@ impl Ui<CrosstermBackend<Stdout>> {
         rx.close();
     }
 
-
     pub fn draw(&mut self, route: &Route, app: &App) {
         let input = &app.input;
 
@@ -118,25 +133,27 @@ impl Ui<CrosstermBackend<Stdout>> {
                                 Constraint::Percentage(10),
                                 Constraint::Percentage(80),
                                 Constraint::Percentage(10),
-                            ].as_ref()
+                            ]
+                            .as_ref(),
                         )
                         .split(f.size());
 
                     let header_text = Span::raw("rpirc -- version 0.1.0");
                     let header = Paragraph::new(header_text)
-                        .block(Block::default()
-                               .title("Welcome!")
-                               .borders(Borders::ALL));
+                        .block(Block::default().title("Welcome!").borders(Borders::ALL));
                     f.render_widget(header, chunks[0]);
 
-                    let items = [ListItem::new("irc.freenode.net"),
-                                 ListItem::new("irc.orpheus.network")];
+                    let items = [
+                        ListItem::new("irc.freenode.net"),
+                        ListItem::new("irc.orpheus.network"),
+                    ];
                     let body = List::new(items)
-                        .block(Block::default()
-                               .title("Quickconnect")
-                               .borders(Borders::NONE))
-                        .highlight_style(Style::default()
-                                         .add_modifier(Modifier::BOLD))
+                        .block(
+                            Block::default()
+                                .title("Quickconnect")
+                                .borders(Borders::NONE),
+                        )
+                        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
                         .highlight_symbol(">>");
                     f.render_widget(body, chunks[1]);
 
@@ -147,25 +164,27 @@ impl Ui<CrosstermBackend<Stdout>> {
                 };
             }
 
+            Route::Server => {
+                todo!();
+            }
+
             Route::Channel => {
-                // TODO
+                todo!();
             }
 
             Route::PrivMsg => {
-                // TODO
+                todo!();
             }
         }
     }
 }
 
-fn draw_input_box<B>(f: &mut Frame<B>,
-                     input: String,
-                     layout_chunk: Rect)
-where B: Backend
+fn draw_input_box<B>(f: &mut Frame<B>, input: String, layout_chunk: Rect)
+where
+    B: Backend,
 {
     let text = Span::raw(input);
-    let block = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL));
+    let block = Paragraph::new(text).block(Block::default().borders(Borders::ALL));
     f.render_widget(block, layout_chunk);
 }
 
@@ -179,12 +198,15 @@ pub mod util {
         Tab(TabEvent),
         Terminate,
         Left,
-        Right
+        Right,
+        Up,
+        Down,
     }
 
     // Routes in the app
     pub enum Route {
         Startup,
+        Server,
         Channel,
         PrivMsg,
     }
@@ -193,21 +215,20 @@ pub mod util {
     pub enum TabEvent {
         Create,
         Delete(usize),
-        View(usize)
+        View(usize),
     }
 }
 
 // Returns Some to run on input command, else None
-fn handle_input (input: String) -> Option<()> {
+fn handle_input(input: String) -> Option<()> {
     if input.starts_with('/') {
         let args: Vec<&str> = input[1..].split(' ').collect();
 
         match args[0] {
-            "quit" => {
-                return None
-            }
+            "quit" => return None,
+            "connect" => {}
 
-            _  => {}
+            _ => {}
         }
     }
 
